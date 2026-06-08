@@ -155,28 +155,41 @@ def load_enquiries(file_bytes):
     if "SENDER" in combined.columns:
         combined["SENDER"] = combined["SENDER"].astype(str).str.strip().str.lower()
 
-    # platform_replied: LAST message of the conversation is from seller/system/robot
-    # If last message = buyer → unanswered (buyer still waiting for reply)
-    # If last message = seller/system/robot → replied
-    # This is correct for ALL platforms (IS_ANSWERED is broken for TikTok)
+    # platform_replied logic (per platform):
+    #   Lazada / Shopee: IS_ANSWERED=True on ANY message → replied (platform flag is reliable)
+    #   TikTok: IS_ANSWERED is ALWAYS False → use last-message sender instead
     REPLY_SENDERS = {"seller","system","robot"}
-    if "SENDER" in combined.columns and "MSG_DT" in combined.columns:
-        last_msg = (
-            combined.sort_values("MSG_DT")
-            .drop_duplicates("CONVERSATION_ID", keep="last")
-            [["CONVERSATION_ID","SENDER"]]
-            .rename(columns={"SENDER":"_last_sender"})
+
+    if "IS_ANSWERED" in combined.columns:
+        combined["_is_answered_bool"] = (
+            combined["IS_ANSWERED"].astype(str).str.strip().str.lower()
+            .isin(["true","1","yes"])
         )
-        last_msg["platform_replied"] = last_msg["_last_sender"].isin(REPLY_SENDERS)
-        combined = combined.merge(last_msg[["CONVERSATION_ID","platform_replied"]],
-                                  on="CONVERSATION_ID", how="left")
-        combined["platform_replied"] = combined["platform_replied"].fillna(False)
-    elif "SENDER" in combined.columns:
-        # No timestamp — fallback: any seller message = replied
-        replied_ids = set(combined[combined["SENDER"].isin(REPLY_SENDERS)]["CONVERSATION_ID"])
-        combined["platform_replied"] = combined["CONVERSATION_ID"].isin(replied_ids)
     else:
-        combined["platform_replied"] = False
+        combined["_is_answered_bool"] = False
+
+    # Conversations where IS_ANSWERED=True for at least one message
+    is_answered_convs = set(
+        combined[combined["_is_answered_bool"]]["CONVERSATION_ID"]
+    )
+
+    # For TikTok (IS_ANSWERED unreliable): last-message sender
+    tiktok_msgs = combined[combined["PLATFORM"] == "tiktok"].copy()
+    if "MSG_DT" in tiktok_msgs.columns and len(tiktok_msgs):
+        last_tiktok = (
+            tiktok_msgs.sort_values("MSG_DT")
+            .drop_duplicates("CONVERSATION_ID", keep="last")[["CONVERSATION_ID","SENDER"]]
+        )
+        tiktok_replied = set(
+            last_tiktok[last_tiktok["SENDER"].isin(REPLY_SENDERS)]["CONVERSATION_ID"]
+        )
+    else:
+        tiktok_replied = set(
+            tiktok_msgs[tiktok_msgs["SENDER"].isin(REPLY_SENDERS)]["CONVERSATION_ID"]
+        )
+
+    all_replied = is_answered_convs | tiktok_replied
+    combined["platform_replied"] = combined["CONVERSATION_ID"].isin(all_replied)
 
     return combined
 
