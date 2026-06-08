@@ -143,12 +143,6 @@ def load_enquiries(file_bytes):
     if "MSG_DT" in combined.columns:
         combined["MSG_DT"] = pd.to_datetime(combined["MSG_DT"], errors="coerce")
 
-    # IS_ANSWERED → bool
-    if "IS_ANSWERED" in combined.columns:
-        combined["IS_ANSWERED"] = (
-            combined["IS_ANSWERED"].astype(str).str.strip().str.lower()
-            .isin(["true","1","yes"])
-        )
     # Platform
     if "SITE_NICK_NAME_ID" in combined.columns:
         combined["PLATFORM"] = (
@@ -156,15 +150,45 @@ def load_enquiries(file_bytes):
         )
     else:
         combined["PLATFORM"] = "unknown"
+
+    # SENDER normalise
+    if "SENDER" in combined.columns:
+        combined["SENDER"] = combined["SENDER"].astype(str).str.strip().str.lower()
+
+    # platform_replied: LAST message of the conversation is from seller/system/robot
+    # If last message = buyer → unanswered (buyer still waiting for reply)
+    # If last message = seller/system/robot → replied
+    # This is correct for ALL platforms (IS_ANSWERED is broken for TikTok)
+    REPLY_SENDERS = {"seller","system","robot"}
+    if "SENDER" in combined.columns and "MSG_DT" in combined.columns:
+        last_msg = (
+            combined.sort_values("MSG_DT")
+            .drop_duplicates("CONVERSATION_ID", keep="last")
+            [["CONVERSATION_ID","SENDER"]]
+            .rename(columns={"SENDER":"_last_sender"})
+        )
+        last_msg["platform_replied"] = last_msg["_last_sender"].isin(REPLY_SENDERS)
+        combined = combined.merge(last_msg[["CONVERSATION_ID","platform_replied"]],
+                                  on="CONVERSATION_ID", how="left")
+        combined["platform_replied"] = combined["platform_replied"].fillna(False)
+    elif "SENDER" in combined.columns:
+        # No timestamp — fallback: any seller message = replied
+        replied_ids = set(combined[combined["SENDER"].isin(REPLY_SENDERS)]["CONVERSATION_ID"])
+        combined["platform_replied"] = combined["CONVERSATION_ID"].isin(replied_ids)
+    else:
+        combined["platform_replied"] = False
+
     return combined
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 def build_conv_df(enq_df):
+    """One row per conversation — use earliest message for metadata, platform_replied from last msg."""
     keep = ["CONVERSATION_ID","STORE_CODE","SITE_NICK_NAME_ID","CHANNEL_NAME",
-            "COUNTRY_CODE","IS_ANSWERED","PLATFORM","_SHEET","MSG_DATE"]
+            "COUNTRY_CODE","platform_replied","PLATFORM","_SHEET","MSG_DATE"]
     cols = [c for c in keep if c in enq_df.columns]
+    # Sort by time ascending, keep first occurrence for metadata (date, store etc.)
     if "MSG_DT" in enq_df.columns:
         enq_df = enq_df.sort_values("MSG_DT")
     return enq_df[cols].drop_duplicates(subset=["CONVERSATION_ID"], keep="first")
@@ -263,8 +287,8 @@ if not tc_file or not enq_file:
 
 **Metrics logic:**
 - **TC Handled** = Conversations found in TC Logs
-- **MP Replied** = IS_ANSWERED=True but NOT in TC Logs
-- **Unanswered** = IS_ANSWERED=False
+- **MP Replied** = Has a seller/system reply in chat enquiries but NOT in TC Logs
+- **Unanswered** = No seller/system reply anywhere (works correctly for TikTok too)
 - **TC AI** = TC conversations where only `chattr` actor replied
 - **TC Seller** = TC conversations where `seller` actor replied
 """)
@@ -349,10 +373,14 @@ merged = fconv.merge(
 for col in ["tc_replied","tc_ai_only","tc_human"]:
     merged[col] = merged[col].fillna(False).infer_objects(copy=False)
 
-is_answered = merged["IS_ANSWERED"] if "IS_ANSWERED" in merged.columns else pd.Series(True, index=merged.index)
+# Use platform_replied (SENDER-based) — correct for all platforms including TikTok
+# IS_ANSWERED is unreliable (always False for TikTok)
+plat_replied = merged["platform_replied"] if "platform_replied" in merged.columns \
+               else pd.Series(True, index=merged.index)
+
 merged["tc_handled"] = merged["tc_replied"]
-merged["mp_replied"] = is_answered & ~merged["tc_replied"]
-merged["unanswered"] = ~is_answered
+merged["mp_replied"] = plat_replied & ~merged["tc_replied"]
+merged["unanswered"] = ~plat_replied & ~merged["tc_replied"]
 
 summary = compute_summary(merged)
 k = summary
@@ -552,7 +580,7 @@ with d1:
     st.download_button("⬇️ Store Performance CSV",
                        store_perf.to_csv(index=False).encode(), "store_performance.csv", "text/csv")
 with d2:
-    detail_cols = ["CONVERSATION_ID","STORE_CODE","PLATFORM","IS_ANSWERED",
+    detail_cols = ["CONVERSATION_ID","STORE_CODE","PLATFORM","platform_replied",
                    "tc_handled","mp_replied","unanswered","tc_ai_only","tc_human"]
     detail_cols = [c for c in detail_cols if c in merged.columns]
     st.download_button("⬇️ Conversation Detail CSV",
