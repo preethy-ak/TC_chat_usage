@@ -1,3 +1,15 @@
+import subprocess, sys
+
+# Self-install packages that Streamlit Cloud misses from requirements.txt
+def _ensure(pkg, import_name=None):
+    try:
+        __import__(import_name or pkg)
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"])
+
+_ensure("openpyxl")
+_ensure("requests")
+
 import streamlit as st
 import pandas as pd
 import altair as alt
