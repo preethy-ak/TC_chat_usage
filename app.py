@@ -1,15 +1,3 @@
-import subprocess, sys
-
-# Self-install packages that Streamlit Cloud misses from requirements.txt
-def _ensure(pkg, import_name=None):
-    try:
-        __import__(import_name or pkg)
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"])
-
-_ensure("openpyxl")
-_ensure("requests")
-
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -17,6 +5,9 @@ import requests
 from datetime import datetime
 import os
 import io
+import zipfile
+import xml.etree.ElementTree as ET
+import re
 
 st.set_page_config(
     page_title="BX Team & TC Usage Analyzer",
@@ -87,22 +78,107 @@ def load_tc_logs(file_bytes):
     df["EVENT_TYPE"]  = df["EVENT_TYPE"].str.strip().str.upper()
     return df
 
+def _read_xlsx_stdlib(file_bytes):
+    """Read all sheets from an xlsx file using only Python stdlib (no openpyxl)."""
+    NS  = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    RNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+    def col_num(ref):
+        letters = re.match(r"([A-Z]+)", ref.upper())
+        if not letters: return 0
+        n = 0
+        for c in letters.group(1):
+            n = n * 26 + (ord(c) - 64)
+        return n - 1
+
+    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+        names = zf.namelist()
+
+        # Shared strings table
+        sst = []
+        if "xl/sharedStrings.xml" in names:
+            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for si in root.findall(f"{{{NS}}}si"):
+                text = "".join(t.text or "" for t in si.iter(f"{{{NS}}}t"))
+                sst.append(text)
+
+        # Sheet list
+        wb  = ET.fromstring(zf.read("xl/workbook.xml"))
+        rels_xml = "xl/_rels/workbook.xml.rels"
+        rels = ET.fromstring(zf.read(rels_xml)) if rels_xml in names else None
+        id_to_target = {}
+        if rels is not None:
+            for r in rels:
+                id_to_target[r.get("Id")] = r.get("Target", "")
+
+        sheet_map = {}  # name → path
+        for sh in wb.findall(f".//{{{NS}}}sheet"):
+            sname = sh.get("name", "Sheet")
+            rid   = sh.get(f"{{{RNS}}}id", "")
+            target = id_to_target.get(rid, "")
+            path = ("xl/" + target) if not target.startswith("xl/") else target
+            if path in names:
+                sheet_map[sname] = path
+
+        sheets = {}
+        for sname, path in sheet_map.items():
+            root = ET.fromstring(zf.read(path))
+            grid = {}
+            for row_el in root.findall(f".//{{{NS}}}row"):
+                rnum = int(row_el.get("r", 0))
+                for c_el in row_el.findall(f"{{{NS}}}c"):
+                    ref = c_el.get("r", "")
+                    if not ref: continue
+                    ci = col_num(ref)
+                    t  = c_el.get("t", "")
+                    v  = c_el.find(f"{{{NS}}}v")
+                    if v is not None and v.text is not None:
+                        if t == "s":
+                            val = sst[int(v.text)] if int(v.text) < len(sst) else ""
+                        elif t == "b":
+                            val = v.text == "1"
+                        else:
+                            try:    val = float(v.text)
+                            except: val = v.text
+                    else:
+                        val = None
+                    grid.setdefault(rnum, {})[ci] = val
+
+            if not grid: continue
+            sorted_rnums = sorted(grid)
+            max_ci = max(max(r.keys(), default=0) for r in grid.values())
+            headers = [str(grid[sorted_rnums[0]].get(i, f"col_{i}")) for i in range(max_ci + 1)]
+            rows = [
+                {headers[i]: grid[rn].get(i) for i in range(max_ci + 1)}
+                for rn in sorted_rnums[1:]
+            ]
+            sheets[sname] = pd.DataFrame(rows)
+
+    return sheets
+
 @st.cache_data
 def load_enquiries(file_bytes):
-    xl = pd.ExcelFile(io.BytesIO(file_bytes))
+    sheet_dict = _read_xlsx_stdlib(file_bytes)
     dfs = []
-    for sheet in xl.sheet_names:
+    for sheet, df in sheet_dict.items():
         try:
-            df = xl.parse(sheet)
-            df.columns = df.columns.str.strip().str.upper()
+            df = df.copy()
+            df.columns = [str(c).strip().upper() for c in df.columns]
             df["_SHEET"] = sheet
 
-            # Normalise date column
+            # Normalise date column (handles both string dates and Excel serial floats)
+            from datetime import timedelta, date as dt_date
+            EXCEL_EPOCH = pd.Timestamp("1899-12-30")
             for c in df.columns:
                 if any(k in c for k in ["TIME","DATE","TS"]) and c not in ("MESSAGE_TYPE","BUYER_ID"):
                     try:
-                        parsed = pd.to_datetime(df[c], errors="coerce")
-                        if parsed.notna().sum() > len(df)*0.5:
+                        col = df[c]
+                        # Excel serial date (numeric)
+                        if pd.api.types.is_numeric_dtype(col):
+                            parsed = EXCEL_EPOCH + pd.to_timedelta(col.astype(float), unit="D")
+                        else:
+                            parsed = pd.to_datetime(col, errors="coerce")
+                        if parsed.notna().sum() > len(df) * 0.5:
                             df["MSG_DATE"] = parsed.dt.date
                             df["MSG_DT"]   = parsed
                             break
