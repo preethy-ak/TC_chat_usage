@@ -46,7 +46,16 @@ with st.sidebar:
 @st.cache_data
 def process_data(file_bytes):
     df = pd.read_csv(file_bytes)
-    df.columns = df.columns.str.strip()
+    # Normalise column names: strip whitespace + uppercase to handle any export format
+    df.columns = df.columns.str.strip().str.upper()
+
+    # Show helpful error if required columns are missing
+    required = {"ACCOUNT_NUMBER","CONVERSATION_ID","ACTOR_TYPE","CREATED_AT","MERCHANT_ID","MESSAGE_ID","NICKNAME_ID"}
+    missing = required - set(df.columns)
+    if missing:
+        st.error(f"CSV is missing columns: {missing}\n\nFound: {list(df.columns)}")
+        st.stop()
+
     df["CREATED_AT"] = pd.to_datetime(df["CREATED_AT"])
     df["date"] = df["CREATED_AT"].dt.date
     df["MERCHANT_ID"] = df["MERCHANT_ID"].fillna("").astype(str)
