@@ -1,619 +1,450 @@
 import streamlit as st
 import pandas as pd
-import altair as alt
-import requests
-from datetime import datetime
-import os
-import io
-import zipfile
-import xml.etree.ElementTree as ET
-import re
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
+# ── Page config ────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="BX Team & TC Usage Analyzer",
+    page_title="Graas · TC Chat Dashboard",
     page_icon="💬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-st.markdown("""
+# ── Graas Blue Theme ───────────────────────────────────────────────
+BLUE_PRIMARY   = "#1D4ED8"
+BLUE_LIGHT     = "#3B82F6"
+BLUE_BRIGHT    = "#60A5FA"
+BLUE_PALE      = "#DBEAFE"
+BG_DARK        = "#0F172A"
+BG_CARD        = "#1E293B"
+BG_CARD2       = "#162032"
+TEXT_PRIMARY   = "#F1F5F9"
+TEXT_SECONDARY = "#94A3B8"
+TEXT_DIM       = "#475569"
+TEAL           = "#0EA5E9"
+GREEN          = "#22C55E"
+AMBER          = "#F59E0B"
+RED            = "#EF4444"
+
+st.markdown(f"""
 <style>
-    div[data-testid="metric-container"] {
-        background: white; border: 1px solid #eef0f8;
-        border-radius: 10px; padding: 12px 18px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    }
-    .section-title {
-        font-size: 1.05rem; font-weight: 700;
-        color: #1a1f36; margin: 1.2rem 0 0.3rem;
-    }
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+  html, body, [class*="css"] {{
+      font-family: 'Inter', sans-serif;
+      background-color: {BG_DARK};
+      color: {TEXT_PRIMARY};
+  }}
+  .block-container {{ padding: 1.5rem 2rem 2rem; max-width: 100%; }}
+  .stApp {{ background-color: {BG_DARK}; }}
+
+  /* Sidebar */
+  section[data-testid="stSidebar"] {{
+      background-color: {BG_CARD} !important;
+      border-right: 1px solid #1e3a5f;
+  }}
+  section[data-testid="stSidebar"] * {{ color: {TEXT_PRIMARY} !important; }}
+
+  /* Metric cards */
+  div[data-testid="metric-container"] {{
+      background: {BG_CARD};
+      border: 1px solid #1e3a5f;
+      border-radius: 10px;
+      padding: 16px 18px;
+      border-left: 3px solid {BLUE_PRIMARY};
+  }}
+  div[data-testid="metric-container"] label {{
+      color: {TEXT_SECONDARY} !important;
+      font-size: 11px !important;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+  }}
+  div[data-testid="metric-container"] [data-testid="stMetricValue"] {{
+      color: {BLUE_BRIGHT} !important;
+      font-size: 26px !important;
+      font-weight: 700 !important;
+  }}
+  div[data-testid="metric-container"] [data-testid="stMetricDelta"] {{
+      font-size: 11px !important;
+  }}
+
+  /* Headers */
+  h1 {{ color: {TEXT_PRIMARY} !important; font-size: 22px !important; font-weight: 700 !important; }}
+  h2 {{ color: {TEXT_PRIMARY} !important; font-size: 17px !important; font-weight: 600 !important; }}
+  h3 {{ color: {TEXT_SECONDARY} !important; font-size: 13px !important; font-weight: 600 !important;
+        text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 0 !important; }}
+
+  /* Upload widget */
+  div[data-testid="stFileUploader"] {{
+      background: {BG_CARD};
+      border: 2px dashed {BLUE_PRIMARY};
+      border-radius: 10px;
+      padding: 16px;
+  }}
+  div[data-testid="stFileUploader"] label {{ color: {TEXT_PRIMARY} !important; font-weight: 600; }}
+
+  /* Selectbox / slider */
+  div[data-baseweb="select"] div {{
+      background: {BG_CARD2} !important;
+      border-color: #1e3a5f !important;
+      color: {TEXT_PRIMARY} !important;
+  }}
+  div[data-testid="stSlider"] {{ color: {TEXT_PRIMARY}; }}
+
+  /* Dataframe */
+  div[data-testid="stDataFrame"] {{ border-radius: 8px; overflow: hidden; }}
+  iframe {{ border-radius: 8px; }}
+
+  /* Divider */
+  hr {{ border-color: #1e3a5f; margin: 1rem 0; }}
+
+  /* Tabs */
+  div[data-testid="stTabs"] button {{
+      color: {TEXT_SECONDARY} !important;
+      border-bottom-color: transparent !important;
+      font-weight: 500;
+  }}
+  div[data-testid="stTabs"] button[aria-selected="true"] {{
+      color: {BLUE_BRIGHT} !important;
+      border-bottom-color: {BLUE_PRIMARY} !important;
+  }}
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+  ::-webkit-scrollbar-track {{ background: {BG_DARK}; }}
+  ::-webkit-scrollbar-thumb {{ background: #1e3a5f; border-radius: 3px; }}
+  ::-webkit-scrollbar-thumb:hover {{ background: {BLUE_PRIMARY}; }}
 </style>
 """, unsafe_allow_html=True)
 
-EXCEL_EPOCH = pd.Timestamp("1899-12-30")
+# ── Chart defaults ─────────────────────────────────────────────────
+CHART_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor=BG_CARD2,
+    font=dict(family="Inter", color=TEXT_SECONDARY, size=11),
+    margin=dict(l=10, r=10, t=30, b=10),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=11)),
+    xaxis=dict(gridcolor="#1e3a5f", linecolor="#1e3a5f", tickfont=dict(size=10)),
+    yaxis=dict(gridcolor="#1e3a5f", linecolor="#1e3a5f", tickfont=dict(size=10)),
+)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STDLIB XLSX READER  (no openpyxl needed)
-# ─────────────────────────────────────────────────────────────────────────────
-def _col_num(ref):
-    m = re.match(r"([A-Z]+)", ref.upper())
-    if not m: return 0
-    n = 0
-    for c in m.group(1): n = n * 26 + (ord(c) - 64)
-    return n - 1
+def apply_layout(fig, title="", height=300):
+    fig.update_layout(**CHART_LAYOUT, title=dict(text=title, font=dict(size=12, color=TEXT_SECONDARY)), height=height)
+    return fig
 
-def _read_xlsx(file_bytes):
-    NS  = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-    RNS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-    with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
-        names = zf.namelist()
-        sst = []
-        if "xl/sharedStrings.xml" in names:
-            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
-            for si in root.findall(f"{{{NS}}}si"):
-                sst.append("".join(t.text or "" for t in si.iter(f"{{{NS}}}t")))
-        wb   = ET.fromstring(zf.read("xl/workbook.xml"))
-        rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
-        id_path = {r.get("Id"): r.get("Target","") for r in rels}
-        sheet_map = {}
-        for sh in wb.findall(f".//{{{NS}}}sheet"):
-            rid = sh.get(f"{{{RNS}}}id","")
-            tgt = id_path.get(rid,"")
-            path = ("xl/"+tgt) if not tgt.startswith("xl/") else tgt
-            if path in names: sheet_map[sh.get("name","Sheet")] = path
-        result = {}
-        for sname, path in sheet_map.items():
-            root = ET.fromstring(zf.read(path))
-            grid = {}
-            for row_el in root.findall(f".//{{{NS}}}row"):
-                rn = int(row_el.get("r", 0))
-                for c_el in row_el.findall(f"{{{NS}}}c"):
-                    ref = c_el.get("r","")
-                    if not ref: continue
-                    ci = _col_num(ref)
-                    t  = c_el.get("t","")
-                    v  = c_el.find(f"{{{NS}}}v")
-                    if v is not None and v.text is not None:
-                        if t == "s":   val = sst[int(v.text)] if int(v.text) < len(sst) else ""
-                        elif t == "b": val = v.text == "1"
-                        else:
-                            try: val = float(v.text)
-                            except: val = v.text
-                    else: val = None
-                    grid.setdefault(rn, {})[ci] = val
-            if not grid: continue
-            srnums = sorted(grid)
-            mc = max(max(r.keys(), default=0) for r in grid.values())
-            hdrs = [str(grid[srnums[0]].get(i, f"col_{i}")) for i in range(mc+1)]
-            rows = [{hdrs[i]: grid[rn].get(i) for i in range(mc+1)} for rn in srnums[1:]]
-            result[sname] = pd.DataFrame(rows)
-    return result
+# ── Helpers ────────────────────────────────────────────────────────
+def pct_color(p):
+    if p >= 5:   return GREEN
+    if p >= 1:   return AMBER
+    if p > 0:    return RED
+    return TEXT_DIM
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA LOADERS
-# ─────────────────────────────────────────────────────────────────────────────
+def status_badge(p):
+    if p >= 5:   return "🟢 On track"
+    if p >= 1:   return "🟡 Early stage"
+    if p > 0:    return "🔴 Just started"
+    return "⚫ Not started"
+
+# ── Sidebar ────────────────────────────────────────────────────────
+with st.sidebar:
+    st.image("https://cdn.prod.website-files.com/686deb6985e5956707d1d644/687494049c704d26a946e7e2_image-6.png",
+             width=130)
+    st.markdown("### TC Chat Dashboard")
+    st.markdown(f"<p style='color:{TEXT_DIM};font-size:11px'>TC vs MP Seller Replies Analytics</p>", unsafe_allow_html=True)
+    st.divider()
+
+    uploaded = st.file_uploader(
+        "Upload Snowflake CSV",
+        type=["csv"],
+        help="Export from Superset using the 90-day TC query"
+    )
+    st.divider()
+
+    st.markdown(f"<p style='color:{TEXT_SECONDARY};font-size:11px;font-weight:600'>FILTERS</p>", unsafe_allow_html=True)
+    period    = st.selectbox("Period", ["Last 90 days", "Last 30 days", "Last 7 days"], index=0)
+    gran      = st.selectbox("Granularity", ["Daily", "Weekly", "Monthly"], index=0)
+    st.divider()
+    st.markdown(f"<p style='color:{TEXT_DIM};font-size:10px'>Columns expected:<br>MERCHANT_ID, DATE,<br>BUYER_MESSAGE_COUNT,<br>MP_REPLY_COUNT,<br>TC_REPLY_COUNT,<br>AUTO_REPLY_COUNT,<br>ORDER_CARD_COUNT,<br>LOGISTICS_CARD_COUNT,<br>RETURN_CARD_COUNT</p>", unsafe_allow_html=True)
+
+# ── Load data ──────────────────────────────────────────────────────
 @st.cache_data
-def load_tc_logs(file_bytes):
-    df = pd.read_csv(io.BytesIO(file_bytes))
-    df.columns = df.columns.str.strip().str.upper()
-    required = {"CONVERSATION_ID","ACTOR_TYPE","MERCHANT_ID","NICKNAME_ID","MESSAGE_ID"}
-    missing = required - set(df.columns)
-    if missing:
-        st.error(f"TC file missing columns: {missing}. Found: {list(df.columns)}")
-        st.stop()
-    if "CREATED_AT" in df.columns:
-        df["CREATED_AT"] = pd.to_datetime(df["CREATED_AT"], errors="coerce")
-        df["TC_DATE"] = df["CREATED_AT"].dt.date
-    df["ACTOR_TYPE"] = df["ACTOR_TYPE"].astype(str).str.strip().str.lower()
+def load(file):
+    df = pd.read_csv(file)
+    df.columns = [c.upper().strip() for c in df.columns]
+    df["DATE"] = pd.to_datetime(df["DATE"])
+    num_cols = ["BUYER_MESSAGE_COUNT","MP_REPLY_COUNT","TC_REPLY_COUNT",
+                "AUTO_REPLY_COUNT","ORDER_CARD_COUNT","LOGISTICS_CARD_COUNT","RETURN_CARD_COUNT"]
+    for c in num_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
     return df
 
-@st.cache_data
-def load_enquiries(file_bytes):
-    sheet_dict = _read_xlsx(file_bytes)
-    dfs = []
-    for sheet, df in sheet_dict.items():
-        try:
-            df = df.copy()
-            df.columns = [str(c).strip().upper() for c in df.columns]
-            df["_SHEET"] = sheet
-            # Detect & parse date column
-            for c in df.columns:
-                if any(k in c for k in ["TIME","DATE","TS"]) and c not in ("MESSAGE_TYPE","BUYER_ID"):
-                    try:
-                        col = df[c]
-                        if pd.api.types.is_numeric_dtype(col):
-                            parsed = EXCEL_EPOCH + pd.to_timedelta(col.astype(float), unit="D")
-                        else:
-                            parsed = pd.to_datetime(col, errors="coerce")
-                        if parsed.notna().sum() > len(df) * 0.5:
-                            df["MSG_DT"]   = parsed
-                            df["MSG_DATE"] = parsed.dt.date
-                            break
-                    except: pass
-            dfs.append(df)
-        except Exception as e:
-            st.warning(f"Skipped sheet '{sheet}': {e}")
+# ── Main ───────────────────────────────────────────────────────────
+st.markdown("## 💬 TC Chat · Seller Reply Dashboard")
+st.markdown(f"<p style='color:{TEXT_DIM};font-size:12px;margin-top:-8px'>TC Replies vs MP Replies vs Buyer Messages · All 22 Merchants</p>", unsafe_allow_html=True)
 
-    combined = pd.concat(dfs, ignore_index=True)
-    combined.columns = combined.columns.str.strip().str.upper()
-
-    # Force MSG_DATE to pure datetime.date (eliminates float/mixed type errors)
-    if "MSG_DATE" in combined.columns:
-        combined["MSG_DATE"] = pd.to_datetime(combined["MSG_DATE"], errors="coerce").dt.date
-    if "MSG_DT" in combined.columns:
-        combined["MSG_DT"] = pd.to_datetime(combined["MSG_DT"], errors="coerce")
-
-    # Platform
-    if "SITE_NICK_NAME_ID" in combined.columns:
-        combined["PLATFORM"] = (
-            combined["SITE_NICK_NAME_ID"].str.extract(r"^(\w+)-")[0].str.lower()
-        )
-    else:
-        combined["PLATFORM"] = "unknown"
-
-    # SENDER normalise
-    if "SENDER" in combined.columns:
-        combined["SENDER"] = combined["SENDER"].astype(str).str.strip().str.lower()
-
-    # platform_replied logic (per platform):
-    #   Lazada / Shopee: IS_ANSWERED=True on ANY message → replied (platform flag is reliable)
-    #   TikTok: IS_ANSWERED is ALWAYS False → use last-message sender instead
-    REPLY_SENDERS = {"seller","system","robot"}
-
-    if "IS_ANSWERED" in combined.columns:
-        combined["_is_answered_bool"] = (
-            combined["IS_ANSWERED"].astype(str).str.strip().str.lower()
-            .isin(["true","1","yes"])
-        )
-    else:
-        combined["_is_answered_bool"] = False
-
-    # Conversations where IS_ANSWERED=True for at least one message
-    is_answered_convs = set(
-        combined[combined["_is_answered_bool"]]["CONVERSATION_ID"]
-    )
-
-    # For TikTok (IS_ANSWERED unreliable): last-message sender
-    tiktok_msgs = combined[combined["PLATFORM"] == "tiktok"].copy()
-    if "MSG_DT" in tiktok_msgs.columns and len(tiktok_msgs):
-        last_tiktok = (
-            tiktok_msgs.sort_values("MSG_DT")
-            .drop_duplicates("CONVERSATION_ID", keep="last")[["CONVERSATION_ID","SENDER"]]
-        )
-        tiktok_replied = set(
-            last_tiktok[last_tiktok["SENDER"].isin(REPLY_SENDERS)]["CONVERSATION_ID"]
-        )
-    else:
-        tiktok_replied = set(
-            tiktok_msgs[tiktok_msgs["SENDER"].isin(REPLY_SENDERS)]["CONVERSATION_ID"]
-        )
-
-    all_replied = is_answered_convs | tiktok_replied
-    combined["platform_replied"] = combined["CONVERSATION_ID"].isin(all_replied)
-
-    return combined
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-def build_conv_df(enq_df):
-    """One row per conversation — use earliest message for metadata, platform_replied from last msg."""
-    keep = ["CONVERSATION_ID","STORE_CODE","SITE_NICK_NAME_ID","CHANNEL_NAME",
-            "COUNTRY_CODE","platform_replied","PLATFORM","_SHEET","MSG_DATE"]
-    cols = [c for c in keep if c in enq_df.columns]
-    # Sort by time ascending, keep first occurrence for metadata (date, store etc.)
-    if "MSG_DT" in enq_df.columns:
-        enq_df = enq_df.sort_values("MSG_DT")
-    return enq_df[cols].drop_duplicates(subset=["CONVERSATION_ID"], keep="first")
-
-def build_tc_conv(tc_df):
-    agg = tc_df.groupby("CONVERSATION_ID").agg(
-        tc_seller_msgs = ("ACTOR_TYPE", lambda x: (x=="seller").sum()),
-        tc_ai_msgs     = ("ACTOR_TYPE", lambda x: (x=="chattr").sum()),
-        store_code     = ("MERCHANT_ID", "first"),
-        nickname       = ("NICKNAME_ID", "first"),
-    ).reset_index()
-    agg["tc_replied"] = True
-    agg["tc_ai_only"] = (agg["tc_seller_msgs"]==0) & (agg["tc_ai_msgs"]>0)
-    agg["tc_human"]   = agg["tc_seller_msgs"] > 0
-    return agg
-
-def compute_summary(merged):
-    total    = len(merged)
-    tc       = int(merged["tc_handled"].sum())
-    mp       = int(merged["mp_replied"].sum())
-    unans    = int(merged["unanswered"].sum())
-    tc_ai    = int(merged["tc_ai_only"].sum())
-    tc_sel   = int(merged["tc_human"].sum())
-    return dict(total_conversations=total, tc_conversations=tc,
-                mp_conversations=mp, unanswered=unans,
-                tc_ai_replies=tc_ai, tc_seller_replies=tc_sel)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SLACK
-# ─────────────────────────────────────────────────────────────────────────────
-def send_slack_report(summary, store_df, token, channel, date_from, date_to):
-    if not token or not token.startswith("xoxb-"):
-        return False, "Invalid token"
-    k = summary
-    tc_pct = round(k["tc_conversations"]/k["total_conversations"]*100,1) if k["total_conversations"] else 0
-    mp_pct = round(k["mp_conversations"]/k["total_conversations"]*100,1) if k["total_conversations"] else 0
-    un_pct = round(k["unanswered"]/k["total_conversations"]*100,1)       if k["total_conversations"] else 0
-    ai_pct = round(k["tc_ai_replies"]/k["tc_conversations"]*100,1)       if k["tc_conversations"] else 0
-    rows = ""
-    for _, r in store_df.iterrows():
-        rows += f"\n• *{r['STORE_CODE']} ({r.get('PLATFORM','')})* — Total: {int(r['total_conversations'])} | TC: {int(r['tc_conversations'])} | MP: {int(r['mp_conversations'])} | Unanswered: {int(r['unanswered'])}"
-    msg = f"""📊 *BX Team & TC Usage Report*
-📅 Period: `{date_from}` → `{date_to}`
-_Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} SGT_
-
-━━━━━━━━━━━━━━━━━━━━━━
-*Overall Summary*
-💬 Total Conversations: *{k['total_conversations']:,}*
-✅ TC Handled: *{k['tc_conversations']:,}* ({tc_pct}%)
-🏪 MP Direct: *{k['mp_conversations']:,}* ({mp_pct}%)
-❌ Unanswered: *{k['unanswered']:,}* ({un_pct}%)
-
-*TC Breakdown*
-🤖 AI Replies: *{k['tc_ai_replies']:,}* ({ai_pct}% of TC)
-👤 Seller Replies: *{k['tc_seller_replies']:,}*
-
-━━━━━━━━━━━━━━━━━━━━━━
-*Store Performance*{rows}"""
-    resp = requests.post(
-        "https://slack.com/api/chat.postMessage",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"channel": channel, "text": msg, "mrkdwn": True}
-    )
-    d = resp.json()
-    return (True, "Sent ✓") if d.get("ok") else (False, d.get("error","Unknown"))
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 💬 BX & TC Analyzer")
-    st.markdown("---")
-    st.markdown("### 📁 File 1 — TC Logs (CSV)")
-    tc_file  = st.file_uploader("GRAAS_CHATTR_LOGS export", type=["csv"], key="tc")
-    st.markdown("### 📁 File 2 — Chat Enquiries (Excel)")
-    enq_file = st.file_uploader("Chat_enquiries Excel", type=["xlsx","xls"], key="enq")
-    st.markdown("---")
-    st.markdown("### ⚙️ Slack")
-    slack_token   = st.text_input("Bot Token", type="password",
-                                   value=os.environ.get("SLACK_BOT_TOKEN",""))
-    slack_channel = st.text_input("Channel ID", value="C0AR6KRBUJC")
-    auto_send     = st.checkbox("Auto-send on upload", value=True)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# LANDING PAGE
-# ─────────────────────────────────────────────────────────────────────────────
-st.title("💬 BX Team & TC Usage Analyzer")
-
-if not tc_file or not enq_file:
-    st.info("👈 Upload **both files** in the sidebar to begin.")
-    st.markdown("""
-| File | What it is | Key columns |
-|---|---|---|
-| TC Logs CSV | GRAAS_CHATTR_LOGS 90-day export | CONVERSATION_ID, ACTOR_TYPE, MERCHANT_ID |
-| Chat Enquiries Excel | All platform chats Feb → D-1 | CONVERSATION_ID, IS_ANSWERED, STORE_CODE |
-
-**Metrics logic:**
-- **TC Handled** = Conversations found in TC Logs
-- **MP Replied** = Has a seller/system reply in chat enquiries but NOT in TC Logs
-- **Unanswered** = No seller/system reply anywhere (works correctly for TikTok too)
-- **TC AI** = TC conversations where only `chattr` actor replied
-- **TC Seller** = TC conversations where `seller` actor replied
-""")
+if uploaded is None:
+    st.markdown(f"""
+    <div style='background:{BG_CARD};border:1px solid #1e3a5f;border-radius:10px;padding:40px;text-align:center;margin-top:20px'>
+        <div style='font-size:40px;margin-bottom:12px'>📂</div>
+        <div style='font-size:16px;font-weight:600;color:{TEXT_PRIMARY};margin-bottom:8px'>Upload your Snowflake CSV</div>
+        <div style='font-size:12px;color:{TEXT_DIM}'>Run the 90-day TC query in Superset → Export → Upload here</div>
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LOAD DATA
-# ─────────────────────────────────────────────────────────────────────────────
-with st.spinner("Loading files…"):
-    tc_df    = load_tc_logs(tc_file.read())
-    enq_df   = load_enquiries(enq_file.read())
+df = load(uploaded)
 
-conv_df  = build_conv_df(enq_df)
-tc_conv  = build_tc_conv(tc_df)
+# ── Date filter ────────────────────────────────────────────────────
+days_map = {"Last 90 days": 90, "Last 30 days": 30, "Last 7 days": 7}
+cutoff = pd.Timestamp.now() - pd.Timedelta(days=days_map[period])
+df_f = df[df["DATE"] >= cutoff].copy()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR FILTERS  (shown after data loads)
-# ─────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("---")
-    st.markdown("### 📅 Date Filter")
-    has_dates = "MSG_DATE" in conv_df.columns and conv_df["MSG_DATE"].notna().any()
-    if has_dates:
-        valid_dates = conv_df["MSG_DATE"].dropna()
-        min_d = valid_dates.min()
-        max_d = valid_dates.max()
-        date_from = st.date_input("From", value=min_d, min_value=min_d, max_value=max_d)
-        date_to   = st.date_input("To",   value=max_d, min_value=min_d, max_value=max_d)
-    else:
-        date_from = date_to = None
+# ── Merchant filter ────────────────────────────────────────────────
+merchants = sorted(df["MERCHANT_ID"].unique())
+sel_merchant = st.sidebar.multiselect("Merchants", merchants, default=merchants)
+df_f = df_f[df_f["MERCHANT_ID"].isin(sel_merchant)]
 
-    st.markdown("### 🏪 Store / Platform")
-    all_platforms = sorted(conv_df["PLATFORM"].dropna().unique()) if "PLATFORM" in conv_df.columns else []
-    sel_platform  = st.multiselect("Platform", all_platforms, placeholder="All")
+# ── Granularity ────────────────────────────────────────────────────
+if gran == "Weekly":
+    df_f["PERIOD"] = df_f["DATE"].dt.to_period("W").dt.start_time
+elif gran == "Monthly":
+    df_f["PERIOD"] = df_f["DATE"].dt.to_period("M").dt.start_time
+else:
+    df_f["PERIOD"] = df_f["DATE"]
 
-    all_stores = sorted(conv_df["STORE_CODE"].dropna().unique()) if "STORE_CODE" in conv_df.columns else []
-    sel_store  = st.multiselect("Store Code", all_stores, placeholder="All")
+grouped = df_f.groupby("PERIOD").agg(
+    buyer=("BUYER_MESSAGE_COUNT","sum"),
+    mp=("MP_REPLY_COUNT","sum"),
+    tc=("TC_REPLY_COUNT","sum"),
+    auto=("AUTO_REPLY_COUNT","sum"),
+    order=("ORDER_CARD_COUNT","sum"),
+    logistics=("LOGISTICS_CARD_COUNT","sum"),
+    ret=("RETURN_CARD_COUNT","sum"),
+).reset_index().sort_values("PERIOD")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# APPLY FILTERS — everything downstream uses `fconv` only
-# ─────────────────────────────────────────────────────────────────────────────
-fconv = conv_df.copy()
+total_buyer  = int(df_f["BUYER_MESSAGE_COUNT"].sum())
+total_mp     = int(df_f["MP_REPLY_COUNT"].sum())
+total_tc     = int(df_f["TC_REPLY_COUNT"].sum())
+total_auto   = int(df_f["AUTO_REPLY_COUNT"].sum())
+total_seller = total_mp + total_tc
+tc_pct       = round(total_tc / total_seller * 100, 1) if total_seller else 0
+mp_pct       = round(total_mp / total_seller * 100, 1) if total_seller else 0
 
-# Date filter
-if date_from and has_dates:
-    fconv = fconv[
-        fconv["MSG_DATE"].notna() &
-        (fconv["MSG_DATE"] >= date_from) &
-        (fconv["MSG_DATE"] <= date_to)
-    ]
+# ── KPI Cards ──────────────────────────────────────────────────────
+st.divider()
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1.metric("Buyer Messages",     f"{total_buyer:,}")
+c2.metric("Total Seller Replies", f"{total_seller:,}", "MP + TC")
+c3.metric("MP Replies",         f"{total_mp:,}",    f"{mp_pct}% of replies")
+c4.metric("TC Replies",         f"{total_tc:,}",    f"{tc_pct}% of replies")
+c5.metric("Auto Replies",       f"{total_auto:,}",  "platform-generated")
+c6.metric("TC Coverage",        f"{tc_pct}%",       "TC ÷ (TC+MP)")
+st.divider()
 
-# Platform filter
-if sel_platform and "PLATFORM" in fconv.columns:
-    fconv = fconv[fconv["PLATFORM"].isin(sel_platform)]
+# ── Tabs ───────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4 = st.tabs(["📈 Trends", "🏪 By Merchant", "📊 Breakdown", "📋 Data Table"])
 
-# Store filter
-if sel_store and "STORE_CODE" in fconv.columns:
-    fconv = fconv[fconv["STORE_CODE"].isin(sel_store)]
+# ── TAB 1: Trends ──────────────────────────────────────────────────
+with tab1:
+    col1, col2 = st.columns([2, 1])
 
-if fconv.empty:
-    st.warning("No data matches the selected filters.")
-    st.stop()
+    with col1:
+        st.markdown("### TC Replies vs MP Replies vs Buyer Messages")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=grouped["PERIOD"], y=grouped["buyer"], name="Buyer Messages",
+            line=dict(color="#64748B", width=1.5), fill="tozeroy", fillcolor="rgba(100,116,139,0.08)"))
+        fig.add_trace(go.Scatter(x=grouped["PERIOD"], y=grouped["mp"], name="MP Replies",
+            line=dict(color=BLUE_LIGHT, width=2), fill="tozeroy", fillcolor=f"rgba(59,130,246,0.1)"))
+        fig.add_trace(go.Scatter(x=grouped["PERIOD"], y=grouped["tc"], name="TC Replies",
+            line=dict(color=TEAL, width=2.5), fill="tozeroy", fillcolor="rgba(14,165,233,0.15)"))
+        apply_layout(fig, height=320)
+        st.plotly_chart(fig, use_container_width=True)
 
-# Active filter banner
-filter_parts = []
-if date_from and has_dates:
-    filter_parts.append(f"📅 {date_from} → {date_to}")
-if sel_platform:
-    filter_parts.append(f"Platform: {', '.join(sel_platform)}")
-if sel_store:
-    filter_parts.append(f"Store: {', '.join(sel_store)}")
-if filter_parts:
-    st.info("**Active filters:** " + "  |  ".join(filter_parts))
+    with col2:
+        st.markdown("### TC Coverage % Trend")
+        grouped["tc_pct"] = (grouped["tc"] / (grouped["mp"] + grouped["tc"]).replace(0, 1) * 100).round(1)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=grouped["PERIOD"], y=grouped["tc_pct"], name="TC %",
+            line=dict(color=BLUE_BRIGHT, width=2.5), fill="tozeroy",
+            fillcolor=f"rgba(96,165,250,0.15)", mode="lines"))
+        fig2.add_hline(y=5, line_dash="dot", line_color=GREEN, annotation_text="5% target",
+                       annotation_font_size=10, annotation_font_color=GREEN)
+        apply_layout(fig2, height=320)
+        fig2.update_yaxes(ticksuffix="%")
+        st.plotly_chart(fig2, use_container_width=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MERGE & CLASSIFY
-# ─────────────────────────────────────────────────────────────────────────────
-merged = fconv.merge(
-    tc_conv[["CONVERSATION_ID","tc_replied","tc_ai_only","tc_human","store_code","nickname"]],
-    on="CONVERSATION_ID", how="left"
-)
-for col in ["tc_replied","tc_ai_only","tc_human"]:
-    merged[col] = merged[col].fillna(False).infer_objects(copy=False)
+    col3, col4 = st.columns(2)
+    with col3:
+        st.markdown("### Auto-Reply vs TC Reply")
+        fig3 = go.Figure()
+        fig3.add_trace(go.Bar(x=grouped["PERIOD"], y=grouped["auto"], name="Auto Replies",
+            marker_color="#334155"))
+        fig3.add_trace(go.Bar(x=grouped["PERIOD"], y=grouped["tc"], name="TC Replies",
+            marker_color=BLUE_LIGHT))
+        apply_layout(fig3, height=280)
+        fig3.update_layout(barmode="group")
+        st.plotly_chart(fig3, use_container_width=True)
 
-# Use platform_replied (SENDER-based) — correct for all platforms including TikTok
-# IS_ANSWERED is unreliable (always False for TikTok)
-plat_replied = merged["platform_replied"] if "platform_replied" in merged.columns \
-               else pd.Series(True, index=merged.index)
+    with col4:
+        st.markdown("### Monthly MP vs TC (all time)")
+        df_mo = df[df["MERCHANT_ID"].isin(sel_merchant)].copy()
+        df_mo["MONTH"] = df_mo["DATE"].dt.to_period("M").astype(str)
+        mo_grp = df_mo.groupby("MONTH").agg(mp=("MP_REPLY_COUNT","sum"), tc=("TC_REPLY_COUNT","sum")).reset_index()
+        fig4 = go.Figure()
+        fig4.add_trace(go.Bar(x=mo_grp["MONTH"], y=mo_grp["mp"], name="MP", marker_color=BLUE_PRIMARY))
+        fig4.add_trace(go.Bar(x=mo_grp["MONTH"], y=mo_grp["tc"], name="TC", marker_color=TEAL))
+        apply_layout(fig4, height=280)
+        fig4.update_layout(barmode="group")
+        st.plotly_chart(fig4, use_container_width=True)
 
-merged["tc_handled"] = merged["tc_replied"]
-merged["mp_replied"] = plat_replied & ~merged["tc_replied"]
-merged["unanswered"] = ~plat_replied & ~merged["tc_replied"]
-
-summary = compute_summary(merged)
-k = summary
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AUTO SLACK
-# ─────────────────────────────────────────────────────────────────────────────
-file_key = f"{tc_file.name}|{enq_file.name}"
-if auto_send and slack_token and st.session_state.get("sent_key") != file_key:
-    st.session_state["sent_key"] = file_key
-    store_snap = merged.groupby(["STORE_CODE","PLATFORM"]).agg(
-        total_conversations=("CONVERSATION_ID","count"),
-        tc_conversations=("tc_handled","sum"),
-        mp_conversations=("mp_replied","sum"),
-        unanswered=("unanswered","sum"),
-    ).sort_values("tc_conversations", ascending=False).head(8).reset_index()
-    ok, msg = send_slack_report(summary, store_snap, slack_token, slack_channel,
-                                 date_from or "–", date_to or "–")
-    st.toast("📤 Report sent to Slack!" if ok else f"Slack: {msg}", icon="✅" if ok else "⚠️")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# KPI ROW
-# ─────────────────────────────────────────────────────────────────────────────
-total = k["total_conversations"]
-tc_pct = round(k["tc_conversations"]/total*100,1) if total else 0
-mp_pct = round(k["mp_conversations"]/total*100,1) if total else 0
-un_pct = round(k["unanswered"]/total*100,1)       if total else 0
-ai_pct = round(k["tc_ai_replies"]/k["tc_conversations"]*100,1) if k["tc_conversations"] else 0
-
-c1,c2,c3,c4,c5,c6,c7 = st.columns(7)
-c1.metric("💬 Total Chats",    f"{total:,}")
-c2.metric("✅ TC Handled",     f"{k['tc_conversations']:,}",  f"{tc_pct}%")
-c3.metric("🏪 MP Replied",    f"{k['mp_conversations']:,}",  f"{mp_pct}%")
-c4.metric("❌ Unanswered",     f"{k['unanswered']:,}",        f"{un_pct}%")
-c5.metric("🤖 TC AI Replies",  f"{k['tc_ai_replies']:,}",    f"{ai_pct}% of TC")
-c6.metric("👤 TC Seller",      f"{k['tc_seller_replies']:,}")
-c7.metric("📊 TC+AI",          f"{k['tc_ai_replies']+k['tc_seller_replies']:,}")
-
-st.markdown("---")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ROW 1 — Donut + Platform bar + TC type bar
-# ─────────────────────────────────────────────────────────────────────────────
-col_a, col_b, col_c = st.columns(3)
-
-with col_a:
-    st.markdown('<div class="section-title">Reply Source Breakdown</div>', unsafe_allow_html=True)
-    pie_df = pd.DataFrame({
-        "type":  ["TC AI Only","TC Seller","MP Replied","Unanswered"],
-        "count": [k["tc_ai_replies"], k["tc_seller_replies"], k["mp_conversations"], k["unanswered"]]
-    }).query("count > 0")
-    st.altair_chart(
-        alt.Chart(pie_df).mark_arc(innerRadius=55)
-        .encode(theta="count:Q",
-                color=alt.Color("type:N", scale=alt.Scale(
-                    domain=["TC AI Only","TC Seller","MP Replied","Unanswered"],
-                    range=["#a855f7","#f59e0b","#3b82f6","#ef4444"])),
-                tooltip=["type:N","count:Q"])
-        .properties(height=270),
-        use_container_width=True
-    )
-
-with col_b:
-    st.markdown('<div class="section-title">By Platform</div>', unsafe_allow_html=True)
-    if "PLATFORM" in merged.columns:
-        plat = merged.groupby("PLATFORM").agg(
-            TC=("tc_handled","sum"), MP=("mp_replied","sum"), Unanswered=("unanswered","sum")
-        ).reset_index().melt(id_vars="PLATFORM", var_name="type", value_name="count")
-        st.altair_chart(
-            alt.Chart(plat).mark_bar()
-            .encode(x="PLATFORM:N", y="count:Q",
-                    color=alt.Color("type:N", scale=alt.Scale(
-                        domain=["TC","MP","Unanswered"], range=["#a855f7","#3b82f6","#ef4444"])),
-                    tooltip=["PLATFORM:N","type:N","count:Q"])
-            .properties(height=270),
-            use_container_width=True
-        )
-
-with col_c:
-    st.markdown('<div class="section-title">TC AI vs Seller</div>', unsafe_allow_html=True)
-    tc_type = pd.DataFrame({
-        "type":  ["AI Only","Seller Only","Both"],
-        "count": [k["tc_ai_replies"], k["tc_seller_replies"],
-                  k["tc_conversations"] - k["tc_ai_replies"] - k["tc_seller_replies"]]
-    }).query("count > 0")
-    st.altair_chart(
-        alt.Chart(tc_type).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-        .encode(x="type:N", y="count:Q",
-                color=alt.Color("type:N", scale=alt.Scale(
-                    domain=["AI Only","Seller Only","Both"],
-                    range=["#a855f7","#f59e0b","#22c55e"])),
-                tooltip=["type:N","count:Q"])
-        .properties(height=270),
-        use_container_width=True
-    )
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ROW 2 — Daily trend (filtered date range)
-# ─────────────────────────────────────────────────────────────────────────────
-if "MSG_DATE" in merged.columns and merged["MSG_DATE"].notna().any():
-    st.markdown('<div class="section-title">📈 Daily Conversation Trend</div>', unsafe_allow_html=True)
-    daily = merged.groupby("MSG_DATE").agg(
-        TC=("tc_handled","sum"), MP=("mp_replied","sum"), Unanswered=("unanswered","sum")
+# ── TAB 2: By Merchant ────────────────────────────────────────────
+with tab2:
+    m_grp = df_f.groupby("MERCHANT_ID").agg(
+        buyer=("BUYER_MESSAGE_COUNT","sum"),
+        mp=("MP_REPLY_COUNT","sum"),
+        tc=("TC_REPLY_COUNT","sum"),
+        auto=("AUTO_REPLY_COUNT","sum"),
     ).reset_index()
-    daily["MSG_DATE"] = pd.to_datetime(daily["MSG_DATE"])
-    daily_long = daily.melt(id_vars="MSG_DATE", var_name="type", value_name="count")
-    st.altair_chart(
-        alt.Chart(daily_long).mark_line(point=True)
-        .encode(x=alt.X("MSG_DATE:T", title="Date", axis=alt.Axis(labelAngle=-35)),
-                y=alt.Y("count:Q", title="Conversations"),
-                color=alt.Color("type:N", scale=alt.Scale(
-                    domain=["TC","MP","Unanswered"], range=["#a855f7","#3b82f6","#ef4444"])),
-                tooltip=["MSG_DATE:T","type:N","count:Q"])
-        .properties(height=280),
-        use_container_width=True
-    )
+    m_grp["total"] = m_grp["mp"] + m_grp["tc"]
+    m_grp["tc_pct"] = (m_grp["tc"] / m_grp["total"].replace(0,1) * 100).round(1)
+    m_grp = m_grp.sort_values("tc_pct", ascending=False)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ROW 3 — Store performance
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">🏪 BX Team Performance by Store</div>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
 
-store_perf = merged.groupby(["STORE_CODE","PLATFORM"]).agg(
-    total_conversations = ("CONVERSATION_ID","count"),
-    tc_conversations    = ("tc_handled","sum"),
-    tc_ai_replies       = ("tc_ai_only","sum"),
-    tc_seller_replies   = ("tc_human","sum"),
-    mp_conversations    = ("mp_replied","sum"),
-    unanswered          = ("unanswered","sum"),
-).reset_index()
-store_perf["tc_pct"]         = (store_perf["tc_conversations"]/store_perf["total_conversations"]*100).round(1)
-store_perf["unanswered_pct"] = (store_perf["unanswered"]/store_perf["total_conversations"]*100).round(1)
-store_perf = store_perf.sort_values("total_conversations", ascending=False)
+    with col1:
+        st.markdown("### TC vs MP Replies by Merchant")
+        fig5 = go.Figure()
+        fig5.add_trace(go.Bar(y=m_grp["MERCHANT_ID"], x=m_grp["mp"], name="MP Replies",
+            orientation="h", marker_color=BLUE_PRIMARY))
+        fig5.add_trace(go.Bar(y=m_grp["MERCHANT_ID"], x=m_grp["tc"], name="TC Replies",
+            orientation="h", marker_color=TEAL))
+        apply_layout(fig5, height=500)
+        fig5.update_layout(barmode="stack",
+            yaxis=dict(gridcolor="#1e3a5f", tickfont=dict(size=10)),
+            xaxis=dict(gridcolor="#1e3a5f"))
+        st.plotly_chart(fig5, use_container_width=True)
 
-col_l, col_r = st.columns([3,2])
-with col_l:
-    top12 = store_perf.head(12).melt(
-        id_vars=["STORE_CODE","PLATFORM"],
-        value_vars=["tc_conversations","mp_conversations","unanswered"],
-        var_name="type", value_name="count"
-    )
-    top12["type"] = top12["type"].map({"tc_conversations":"TC","mp_conversations":"MP","unanswered":"Unanswered"})
-    st.altair_chart(
-        alt.Chart(top12).mark_bar()
-        .encode(x=alt.X("count:Q", title="Conversations"),
-                y=alt.Y("STORE_CODE:N", sort="-x"),
-                color=alt.Color("type:N", scale=alt.Scale(
-                    domain=["TC","MP","Unanswered"], range=["#a855f7","#3b82f6","#ef4444"])),
-                tooltip=["STORE_CODE:N","PLATFORM:N","type:N","count:Q"])
-        .properties(height=380),
-        use_container_width=True
-    )
-with col_r:
-    st.altair_chart(
-        alt.Chart(store_perf.head(20)).mark_circle()
-        .encode(x=alt.X("tc_pct:Q", title="TC Handled %", scale=alt.Scale(domain=[0,105])),
-                y=alt.Y("unanswered_pct:Q", title="Unanswered %"),
-                size=alt.Size("total_conversations:Q", scale=alt.Scale(range=[50,900])),
-                color="PLATFORM:N",
-                tooltip=["STORE_CODE:N","PLATFORM:N","total_conversations:Q","tc_pct:Q","unanswered_pct:Q"])
-        .properties(title="TC% vs Unanswered% (bubble = volume)", height=380),
-        use_container_width=True
-    )
+    with col2:
+        st.markdown("### TC Coverage % by Merchant")
+        colors = [GREEN if p>=5 else AMBER if p>=1 else RED if p>0 else TEXT_DIM
+                  for p in m_grp["tc_pct"]]
+        fig6 = go.Figure()
+        fig6.add_trace(go.Bar(y=m_grp["MERCHANT_ID"], x=m_grp["tc_pct"], orientation="h",
+            marker_color=colors, text=m_grp["tc_pct"].astype(str)+"%",
+            textposition="outside", textfont=dict(size=10, color=TEXT_SECONDARY)))
+        fig6.add_vline(x=5, line_dash="dot", line_color=GREEN,
+                       annotation_text="5% target", annotation_font_color=GREEN, annotation_font_size=10)
+        apply_layout(fig6, height=500)
+        fig6.update_xaxes(ticksuffix="%")
+        fig6.update_yaxes(gridcolor="#1e3a5f")
+        st.plotly_chart(fig6, use_container_width=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MONTHLY SUMMARY TABLE
-# ─────────────────────────────────────────────────────────────────────────────
-if "MSG_DATE" in merged.columns and merged["MSG_DATE"].notna().any():
-    st.markdown('<div class="section-title">📅 Monthly Summary</div>', unsafe_allow_html=True)
-    merged["month"] = pd.to_datetime(merged["MSG_DATE"], errors="coerce").dt.to_period("M").astype(str)
-    monthly = merged.groupby("month").agg(
-        Total=("CONVERSATION_ID","count"),
-        TC=("tc_handled","sum"),
-        MP=("mp_replied","sum"),
-        Unanswered=("unanswered","sum"),
-        TC_AI=("tc_ai_only","sum"),
-        TC_Seller=("tc_human","sum"),
+    # Buyer volume bubble
+    st.markdown("### Buyer Volume vs TC Coverage (bubble = total seller replies)")
+    fig7 = px.scatter(m_grp, x="buyer", y="tc_pct", size="total", color="tc_pct",
+        text="MERCHANT_ID", color_continuous_scale=[[0,"#EF4444"],[0.3,"#F59E0B"],[1,"#22C55E"]],
+        size_max=60)
+    fig7.update_traces(textposition="top center", textfont=dict(size=10, color=TEXT_SECONDARY))
+    apply_layout(fig7, height=360)
+    fig7.update_yaxes(ticksuffix="%", title="TC Coverage %")
+    fig7.update_xaxes(title="Buyer Messages")
+    fig7.update_layout(coloraxis_showscale=False)
+    st.plotly_chart(fig7, use_container_width=True)
+
+# ── TAB 3: Breakdown ─────────────────────────────────────────────
+with tab3:
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### Reply type distribution")
+        labels = ["MP Replies", "TC Replies", "Auto Replies"]
+        values = [total_mp, total_tc, total_auto]
+        colors_pie = [BLUE_PRIMARY, TEAL, "#334155"]
+        fig8 = go.Figure(go.Pie(labels=labels, values=values, hole=0.55,
+            marker=dict(colors=colors_pie, line=dict(color=BG_DARK, width=2)),
+            textfont=dict(size=11)))
+        fig8.update_layout(**CHART_LAYOUT, height=300,
+            annotations=[dict(text=f"Total<br>{total_seller:,}", x=0.5, y=0.5,
+                             font=dict(size=13, color=TEXT_PRIMARY), showarrow=False)])
+        st.plotly_chart(fig8, use_container_width=True)
+
+    with col2:
+        st.markdown("### Buyer message card types (period total)")
+        card_vals = [
+            df_f["ORDER_CARD_COUNT"].sum(),
+            df_f["LOGISTICS_CARD_COUNT"].sum(),
+            df_f["RETURN_CARD_COUNT"].sum(),
+            total_buyer - df_f["ORDER_CARD_COUNT"].sum() - df_f["LOGISTICS_CARD_COUNT"].sum() - df_f["RETURN_CARD_COUNT"].sum(),
+        ]
+        card_lbls = ["Order cards", "Logistics cards", "Return cards", "Text/Media"]
+        card_cols = [BLUE_LIGHT, BLUE_BRIGHT, "#818CF8", "#334155"]
+        fig9 = go.Figure(go.Bar(x=card_lbls, y=card_vals, marker_color=card_cols,
+            text=[f"{v:,}" for v in card_vals], textposition="outside",
+            textfont=dict(size=10, color=TEXT_SECONDARY)))
+        apply_layout(fig9, height=300)
+        st.plotly_chart(fig9, use_container_width=True)
+
+    # TC ramp per merchant (line per merchant, Jun only)
+    st.markdown("### TC ramp-up — daily TC replies per merchant (Jun 2026)")
+    df_jun = df[df["MERCHANT_ID"].isin(sel_merchant) & (df["DATE"] >= "2026-06-01")].copy()
+    fig10 = go.Figure()
+    blues = [BLUE_BRIGHT, TEAL, BLUE_LIGHT, "#818CF8", "#38BDF8", "#7DD3FC",
+             "#BAE6FD", "#E0F2FE", "#1D4ED8", "#2563EB", "#3B82F6", "#60A5FA"]
+    tc_merchants = df_jun.groupby("MERCHANT_ID")["TC_REPLY_COUNT"].sum()
+    active = tc_merchants[tc_merchants>0].sort_values(ascending=False).index.tolist()
+    for i, m in enumerate(active):
+        mdf = df_jun[df_jun["MERCHANT_ID"]==m].sort_values("DATE")
+        fig10.add_trace(go.Scatter(x=mdf["DATE"], y=mdf["TC_REPLY_COUNT"], name=m,
+            line=dict(color=blues[i % len(blues)], width=2), mode="lines+markers",
+            marker=dict(size=5)))
+    apply_layout(fig10, height=320)
+    st.plotly_chart(fig10, use_container_width=True)
+
+# ── TAB 4: Data Table ────────────────────────────────────────────
+with tab4:
+    # Summary per merchant
+    all_m = df[df["MERCHANT_ID"].isin(sel_merchant)].groupby("MERCHANT_ID").agg(
+        Buyer_Msgs=("BUYER_MESSAGE_COUNT","sum"),
+        MP_Replies=("MP_REPLY_COUNT","sum"),
+        TC_Replies=("TC_REPLY_COUNT","sum"),
+        Auto_Replies=("AUTO_REPLY_COUNT","sum"),
+        Order_Cards=("ORDER_CARD_COUNT","sum"),
+        Logistics=("LOGISTICS_CARD_COUNT","sum"),
+        Returns=("RETURN_CARD_COUNT","sum"),
     ).reset_index()
-    monthly["TC%"] = (monthly["TC"]/monthly["Total"]*100).round(1)
-    monthly["Unanswered%"] = (monthly["Unanswered"]/monthly["Total"]*100).round(1)
-    st.dataframe(monthly, use_container_width=True, hide_index=True)
+    all_m["Total_Seller_Replies"] = all_m["MP_Replies"] + all_m["TC_Replies"]
+    all_m["TC_%"] = (all_m["TC_Replies"] / all_m["Total_Seller_Replies"].replace(0,1) * 100).round(1)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STORE DETAIL TABLE
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">📋 Store Detail Table</div>', unsafe_allow_html=True)
-disp = store_perf.copy()
-disp.columns = [c.replace("_"," ").title() for c in disp.columns]
-st.dataframe(disp, use_container_width=True, height=300, hide_index=True)
+    # TC start date from full data
+    tc_start = df[df["TC_REPLY_COUNT"]>0].groupby("MERCHANT_ID")["DATE"].min().dt.strftime("%Y-%m-%d")
+    all_m["TC_Started"] = all_m["MERCHANT_ID"].map(tc_start).fillna("Not started")
+    all_m["Status"] = all_m["TC_%"].apply(status_badge)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DOWNLOADS
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("---")
-d1, d2 = st.columns(2)
-with d1:
-    st.download_button("⬇️ Store Performance CSV",
-                       store_perf.to_csv(index=False).encode(), "store_performance.csv", "text/csv")
-with d2:
-    detail_cols = ["CONVERSATION_ID","STORE_CODE","PLATFORM","platform_replied",
-                   "tc_handled","mp_replied","unanswered","tc_ai_only","tc_human"]
-    detail_cols = [c for c in detail_cols if c in merged.columns]
-    st.download_button("⬇️ Conversation Detail CSV",
-                       merged[detail_cols].to_csv(index=False).encode(), "conversation_detail.csv", "text/csv")
+    all_m = all_m.sort_values("TC_%", ascending=False).rename(columns={"MERCHANT_ID":"Merchant"})
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MANUAL SLACK SEND
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("### 📤 Send Report to Slack")
-sc1, sc2 = st.columns([3,1])
-with sc1:
-    st.caption(f"Posts to `{slack_channel}` (#automation-jira-test) · filtered period: {date_from or 'all'} → {date_to or 'all'}")
-with sc2:
-    if st.button("Send Now 🚀", type="primary", use_container_width=True):
-        if not slack_token:
-            st.error("Add Slack Bot Token in sidebar.")
-        else:
-            with st.spinner("Sending…"):
-                ok, msg = send_slack_report(
-                    summary, store_perf.head(8), slack_token, slack_channel,
-                    date_from or "all", date_to or "all"
-                )
-            st.success("✅ Sent to #automation-jira-test!") if ok else st.error(f"Failed: {msg}")
+    st.markdown("### Merchant Summary — Full Period")
+    st.dataframe(
+        all_m[["Merchant","Buyer_Msgs","MP_Replies","TC_Replies","Auto_Replies",
+               "Total_Seller_Replies","TC_%","Order_Cards","Logistics","Returns","TC_Started","Status"]],
+        use_container_width=True,
+        height=500,
+        column_config={
+            "TC_%": st.column_config.ProgressColumn("TC %", min_value=0, max_value=100, format="%.1f%%"),
+            "Merchant": st.column_config.TextColumn("Merchant", width="small"),
+            "Status": st.column_config.TextColumn("Status", width="medium"),
+        }
+    )
+
+    st.divider()
+    st.markdown("### Raw daily data")
+    show_df = df_f.rename(columns={
+        "MERCHANT_ID":"Merchant","DATE":"Date",
+        "BUYER_MESSAGE_COUNT":"Buyer","MP_REPLY_COUNT":"MP Reply",
+        "TC_REPLY_COUNT":"TC Reply","AUTO_REPLY_COUNT":"Auto",
+        "ORDER_CARD_COUNT":"Orders","LOGISTICS_CARD_COUNT":"Logistics","RETURN_CARD_COUNT":"Returns"
+    })
+    st.dataframe(show_df.drop(columns=["PERIOD"] if "PERIOD" in show_df.columns else []),
+                 use_container_width=True, height=400)
