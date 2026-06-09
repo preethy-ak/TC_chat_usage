@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from plotly.subplots import make_subplots
+
 
 # ── Page config ────────────────────────────────────────────────────
 st.set_page_config(
@@ -209,9 +209,9 @@ df_f = df_f[df_f["MERCHANT_ID"].isin(sel_merchant)]
 
 # ── Granularity ────────────────────────────────────────────────────
 if gran == "Weekly":
-    df_f["PERIOD"] = df_f["DATE"].dt.to_period("W").dt.start_time
+    df_f["PERIOD"] = df_f["DATE"].dt.to_period("W").dt.to_timestamp()
 elif gran == "Monthly":
-    df_f["PERIOD"] = df_f["DATE"].dt.to_period("M").dt.start_time
+    df_f["PERIOD"] = df_f["DATE"].dt.to_period("M").dt.to_timestamp()
 else:
     df_f["PERIOD"] = df_f["DATE"]
 
