@@ -16,13 +16,13 @@ st.set_page_config(
 st.markdown("""
 <style>
     div[data-testid="metric-container"] {
-        background: white; border: 1px solid #eef0f8;
         border-radius: 10px; padding: 14px 18px;
+        border: 1px solid rgba(128,128,128,0.2);
         box-shadow: 0 1px 4px rgba(0,0,0,0.07);
     }
     .section-title {
         font-size: 1rem; font-weight: 700;
-        color: #1a1f36; margin: 1.2rem 0 0.4rem;
+        margin: 1.2rem 0 0.4rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -172,16 +172,18 @@ with col_l:
         "TC_REPLY_COUNT":      "TC Replies",
         "MP_REPLY_COUNT":      "MP Replies"
     })
+    AXIS = alt.Axis(labelColor="#ccc", titleColor="#ccc", gridColor="rgba(255,255,255,0.1)")
     st.altair_chart(
-        alt.Chart(daily_long).mark_line(point=True)
+        alt.Chart(daily_long).mark_line(point=alt.OverlayMarkDef(size=60))
         .encode(
-            x=alt.X("DATE_ONLY:T", title="Date", axis=alt.Axis(labelAngle=-35)),
-            y=alt.Y("count:Q", title="Count"),
+            x=alt.X("DATE_ONLY:T", title="Date", axis=alt.Axis(labelAngle=-35, labelColor="#ccc", titleColor="#ccc")),
+            y=alt.Y("count:Q", title="Count", axis=AXIS),
             color=alt.Color("type:N", scale=alt.Scale(
                 domain=["Buyer Messages","TC Replies","MP Replies"],
-                range=["#94a3b8","#a855f7","#3b82f6"])),
+                range=["#94a3b8","#c084fc","#60a5fa"]),
+                legend=alt.Legend(labelColor="#ccc", titleColor="#ccc")),
             tooltip=["DATE_ONLY:T","type:N","count:Q"]
-        ).properties(height=300),
+        ).properties(height=300, background="transparent"),
         use_container_width=True
     )
 
@@ -197,9 +199,10 @@ with col_r:
             theta="count:Q",
             color=alt.Color("type:N", scale=alt.Scale(
                 domain=["TC Replies","MP Replies"],
-                range=["#a855f7","#3b82f6"])),
+                range=["#c084fc","#60a5fa"]),
+                legend=alt.Legend(labelColor="#ccc", titleColor="#ccc")),
             tooltip=["type:N","count:Q"]
-        ).properties(height=300),
+        ).properties(height=300, background="transparent"),
         use_container_width=True
     )
 
@@ -227,27 +230,31 @@ with col_a:
         var_name="type", value_name="count"
     )
     merch_long["type"] = merch_long["type"].map({"tc_replies":"TC","mp_replies":"MP"})
+    BAR_AXIS = dict(labelColor="#ccc", titleColor="#ccc")
     st.altair_chart(
         alt.Chart(merch_long).mark_bar()
         .encode(
-            x=alt.X("count:Q", title="Replies"),
-            y=alt.Y("MERCHANT_ID:N", sort="-x", title="Merchant"),
+            x=alt.X("count:Q", title="Replies", axis=alt.Axis(**BAR_AXIS)),
+            y=alt.Y("MERCHANT_ID:N", sort="-x", title="Merchant", axis=alt.Axis(**BAR_AXIS)),
             color=alt.Color("type:N", scale=alt.Scale(
-                domain=["TC","MP"], range=["#a855f7","#3b82f6"])),
+                domain=["TC","MP"], range=["#c084fc","#60a5fa"]),
+                legend=alt.Legend(labelColor="#ccc", titleColor="#ccc")),
             tooltip=["MERCHANT_ID:N","type:N","count:Q"]
-        ).properties(height=360),
+        ).properties(height=360, background="transparent"),
         use_container_width=True
     )
 
 with col_b:
     st.altair_chart(
-        alt.Chart(merch).mark_bar(color="#a855f7", cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        alt.Chart(merch).mark_bar(color="#c084fc", cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
         .encode(
             x=alt.X("MERCHANT_ID:N", sort="-y", title="Merchant",
-                    axis=alt.Axis(labelAngle=-45)),
-            y=alt.Y("tc_pct:Q", title="TC Reply %", scale=alt.Scale(domain=[0,100])),
+                    axis=alt.Axis(labelAngle=-45, labelColor="#ccc", titleColor="#ccc")),
+            y=alt.Y("tc_pct:Q", title="TC Reply %", scale=alt.Scale(domain=[0,100]),
+                    axis=alt.Axis(labelColor="#ccc", titleColor="#ccc")),
             tooltip=["MERCHANT_ID:N","tc_pct:Q","tc_replies:Q","total_replies:Q"]
-        ).properties(title="TC Reply % by Merchant", height=360),
+        ).properties(title=alt.TitleParams("TC Reply % by Merchant", color="#ccc"),
+                     height=360, background="transparent"),
         use_container_width=True
     )
 
@@ -258,15 +265,16 @@ st.markdown('<div class="section-title">📊 Daily TC% by Merchant</div>', unsaf
 heat = df.copy()
 heat["DATE_ONLY"] = pd.to_datetime(heat["DATE_ONLY"])
 st.altair_chart(
-    alt.Chart(heat).mark_rect()
+    alt.Chart(heat).mark_rect(stroke="rgba(0,0,0,0.1)", strokeWidth=0.5)
     .encode(
-        x=alt.X("DATE_ONLY:T", title="Date", axis=alt.Axis(labelAngle=-35)),
-        y=alt.Y("MERCHANT_ID:N", title="Merchant"),
+        x=alt.X("DATE_ONLY:T", title="Date", axis=alt.Axis(labelAngle=-35, labelColor="#ccc", titleColor="#ccc")),
+        y=alt.Y("MERCHANT_ID:N", title="Merchant", axis=alt.Axis(labelColor="#ccc", titleColor="#ccc")),
         color=alt.Color("TC_REPLY_PCT:Q", title="TC%",
-                        scale=alt.Scale(scheme="purples")),
+                        scale=alt.Scale(scheme="plasma"),
+                        legend=alt.Legend(labelColor="#ccc", titleColor="#ccc")),
         tooltip=["MERCHANT_ID:N","DATE_ONLY:T","TC_REPLY_COUNT:Q",
                  "MP_REPLY_COUNT:Q","TC_REPLY_PCT:Q"]
-    ).properties(height=max(200, len(merch)*28)),
+    ).properties(height=max(200, len(merch)*28), background="transparent"),
     use_container_width=True
 )
 
