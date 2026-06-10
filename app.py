@@ -177,6 +177,89 @@ c6.metric("📅 Days",              f"{df['DATE_ONLY'].nunique()}")
 st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TC ADOPTION TREND  — monthly MoM view
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown('<div class="section-title">📈 TC Adoption Trend — Month on Month</div>', unsafe_allow_html=True)
+
+# Always use full unfiltered data for the MoM trend (so Feb-Jun always visible)
+monthly_raw = df_raw.copy()
+monthly_raw["MONTH"] = pd.to_datetime(monthly_raw["DATE_ONLY"]).dt.to_period("M")
+monthly_agg = monthly_raw.groupby("MONTH").agg(
+    tc=("TC_REPLY_COUNT","sum"),
+    total=("TOTAL_SELLER_REPLY_COUNT","sum")
+).reset_index()
+monthly_agg["tc_pct"] = (monthly_agg["tc"] / monthly_agg["total"].replace(0,1) * 100).round(1)
+monthly_agg["month_label"] = monthly_agg["MONTH"].dt.strftime("%b %Y")
+monthly_agg["MONTH_DT"] = monthly_agg["MONTH"].dt.to_timestamp()
+
+# Per-merchant monthly table
+merch_monthly = monthly_raw.groupby(["MERCHANT_ID","MONTH"]).agg(
+    tc=("TC_REPLY_COUNT","sum"),
+    total=("TOTAL_SELLER_REPLY_COUNT","sum")
+).reset_index()
+merch_monthly["tc_pct"] = (merch_monthly["tc"] / merch_monthly["total"].replace(0,1) * 100).round(1)
+merch_monthly["month_label"] = merch_monthly["MONTH"].dt.strftime("%b")
+
+# Pivot to wide format for the table
+pivot = merch_monthly.pivot_table(
+    index="MERCHANT_ID", columns="month_label", values="tc_pct", aggfunc="mean"
+).round(1).reset_index()
+# Sort months correctly
+month_order = ["Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan"]
+present_months = [m for m in month_order if m in pivot.columns]
+pivot = pivot[["MERCHANT_ID"] + present_months].sort_values(
+    present_months[-1] if present_months else "MERCHANT_ID", ascending=False
+)
+
+# Latest vs prev month KPIs
+if len(monthly_agg) >= 2:
+    latest_pct = monthly_agg.iloc[-1]["tc_pct"]
+    prev_pct   = monthly_agg.iloc[-2]["tc_pct"]
+    latest_label = monthly_agg.iloc[-1]["month_label"]
+    prev_label   = monthly_agg.iloc[-2]["month_label"]
+else:
+    latest_pct = monthly_agg.iloc[-1]["tc_pct"] if len(monthly_agg) else 0
+    prev_pct = 0; latest_label = "Latest"; prev_label = "Prev"
+
+ka, kb, kc = st.columns([1,1,4])
+ka.metric(f"TC Adoption ({latest_label})", f"{latest_pct}%",
+          f"+{round(latest_pct - prev_pct,1)}% vs {prev_label}")
+kb.metric(f"TC Adoption ({prev_label})",   f"{prev_pct}%")
+
+with kc:
+    # Annotated line chart
+    base = alt.Chart(monthly_agg).encode(
+        x=alt.X("MONTH_DT:T", title="Month",
+                axis=alt.Axis(format="%b %Y", labelAngle=0, labelColor="#ccc", titleColor="#ccc")),
+        y=alt.Y("tc_pct:Q", title="TC Adoption %",
+                axis=alt.Axis(labelColor="#ccc", titleColor="#ccc"))
+    )
+    line   = base.mark_line(color="#f97316", strokeWidth=3)
+    points = base.mark_point(color="#f97316", size=100, filled=True)
+    labels = base.mark_text(dy=-14, color="#f97316", fontWeight="bold", fontSize=13).encode(
+        text=alt.Text("tc_pct:Q", format=".1f")
+    )
+    st.altair_chart(
+        (line + points + labels).properties(height=260, background="transparent"),
+        use_container_width=True
+    )
+
+# Seller Adoption table
+st.markdown("**Seller Adoption by Month (%)**")
+def fmt(v):
+    if pd.isna(v): return "—"
+    return f"{v:.1f}%"
+styled = pivot.copy()
+for m in present_months:
+    styled[m] = styled[m].apply(fmt)
+styled = styled.rename(columns={"MERCHANT_ID":"Seller"})
+st.dataframe(styled, use_container_width=True, hide_index=True)
+
+st.caption("🎯 Target: ≥50% TC adoption per seller by Q3 2026")
+
+st.markdown("---")
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ROW 1 — Daily trend + Breakdown donut
 # ─────────────────────────────────────────────────────────────────────────────
 col_l, col_r = st.columns([3, 1])
