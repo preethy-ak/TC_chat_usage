@@ -101,6 +101,14 @@ def load(file_bytes):
     else:
         df["TC_REPLY_PCT"] = pd.to_numeric(df["TC_REPLY_PCT"], errors="coerce").fillna(0).round(1)
 
+    # CHANNEL — use column if present, else derive from NICKNAME_ID, else mark Unknown
+    if "CHANNEL" not in df.columns:
+        if "NICKNAME_ID" in df.columns:
+            df["CHANNEL"] = df["NICKNAME_ID"].astype(str).str.extract(r"^(\w+)-")[0].str.capitalize()
+        else:
+            df["CHANNEL"] = "Unknown"
+
+    df["CHANNEL"] = df["CHANNEL"].astype(str).str.strip()
     return df
 
 df_raw = load(uploaded.read())
@@ -116,14 +124,24 @@ with st.sidebar:
     date_from = st.date_input("From", value=min_d, min_value=min_d, max_value=max_d)
     date_to   = st.date_input("To",   value=max_d, min_value=min_d, max_value=max_d)
 
+    st.markdown("### 📡 Channel")
+    all_channels = sorted(df_raw["CHANNEL"].unique())
+    sel_channels = st.multiselect("Channel", all_channels,
+                                   placeholder="All channels",
+                                   help="Filter by Lazada, Shopee, TikTok etc.")
+
     st.markdown("### 🏪 Merchant")
-    merchants = sorted(df_raw["MERCHANT_ID"].unique())
+    # Merchant list updates based on channel selection
+    merch_pool = df_raw[df_raw["CHANNEL"].isin(sel_channels)] if sel_channels else df_raw
+    merchants = sorted(merch_pool["MERCHANT_ID"].unique())
     sel_merchants = st.multiselect("Merchant ID", merchants, placeholder="All merchants")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FILTER
 # ─────────────────────────────────────────────────────────────────────────────
 df = df_raw[(df_raw["DATE_ONLY"] >= date_from) & (df_raw["DATE_ONLY"] <= date_to)].copy()
+if sel_channels:
+    df = df[df["CHANNEL"].isin(sel_channels)]
 if sel_merchants:
     df = df[df["MERCHANT_ID"].isin(sel_merchants)]
 
@@ -133,6 +151,7 @@ if df.empty:
 
 # Active filter banner
 parts = [f"📅 {date_from} → {date_to}"]
+if sel_channels:  parts.append(f"Channel: {', '.join(sel_channels)}")
 if sel_merchants: parts.append(f"Merchants: {', '.join(sel_merchants)}")
 st.info("  |  ".join(parts))
 
