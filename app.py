@@ -75,20 +75,32 @@ if not uploaded:
 def load(file_bytes):
     df = pd.read_csv(io.BytesIO(file_bytes))
     df.columns = df.columns.str.strip().str.upper()
-    required = {"MERCHANT_ID","DATE","BUYER_MESSAGE_COUNT","MP_REPLY_COUNT",
-                "TC_REPLY_COUNT","TOTAL_SELLER_REPLY_COUNT"}
+
+    # Only these are truly required
+    required = {"MERCHANT_ID","DATE","BUYER_MESSAGE_COUNT","MP_REPLY_COUNT","TC_REPLY_COUNT"}
     missing = required - set(df.columns)
     if missing:
-        st.error(f"Missing columns: {missing}")
+        st.error(f"Missing columns: {missing}. Found: {list(df.columns)}")
         st.stop()
+
     df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
     df["DATE_ONLY"] = df["DATE"].dt.date
-    for c in ["BUYER_MESSAGE_COUNT","MP_REPLY_COUNT","TC_REPLY_COUNT","TOTAL_SELLER_REPLY_COUNT"]:
+
+    for c in ["BUYER_MESSAGE_COUNT","MP_REPLY_COUNT","TC_REPLY_COUNT"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+
+    # Compute TOTAL_SELLER_REPLY_COUNT if not present
+    if "TOTAL_SELLER_REPLY_COUNT" not in df.columns:
+        df["TOTAL_SELLER_REPLY_COUNT"] = df["TC_REPLY_COUNT"] + df["MP_REPLY_COUNT"]
+    else:
+        df["TOTAL_SELLER_REPLY_COUNT"] = pd.to_numeric(df["TOTAL_SELLER_REPLY_COUNT"], errors="coerce").fillna(0).astype(int)
+
+    # Compute TC_REPLY_PCT if not present
     if "TC_REPLY_PCT" not in df.columns:
-        df["TC_REPLY_PCT"] = (df["TC_REPLY_COUNT"] / df["TOTAL_SELLER_REPLY_COUNT"].replace(0, 1) * 100).round(1)
+        df["TC_REPLY_PCT"] = (df["TC_REPLY_COUNT"] / df["TOTAL_SELLER_REPLY_COUNT"].replace(0,1) * 100).round(1)
     else:
         df["TC_REPLY_PCT"] = pd.to_numeric(df["TC_REPLY_PCT"], errors="coerce").fillna(0).round(1)
+
     return df
 
 df_raw = load(uploaded.read())
