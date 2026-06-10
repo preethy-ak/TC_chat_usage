@@ -259,24 +259,49 @@ with col_b:
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ROW 3 — Daily TC% heatmap
+# ROW 3 — Daily TC% trend per merchant (top 8 by TC replies)
 # ─────────────────────────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">📊 Daily TC% by Merchant</div>', unsafe_allow_html=True)
-heat = df.copy()
-heat["DATE_ONLY"] = pd.to_datetime(heat["DATE_ONLY"])
-st.altair_chart(
-    alt.Chart(heat).mark_rect(stroke="rgba(0,0,0,0.1)", strokeWidth=0.5)
-    .encode(
-        x=alt.X("DATE_ONLY:T", title="Date", axis=alt.Axis(labelAngle=-35, labelColor="#ccc", titleColor="#ccc")),
-        y=alt.Y("MERCHANT_ID:N", title="Merchant", axis=alt.Axis(labelColor="#ccc", titleColor="#ccc")),
-        color=alt.Color("TC_REPLY_PCT:Q", title="TC%",
-                        scale=alt.Scale(scheme="plasma"),
-                        legend=alt.Legend(labelColor="#ccc", titleColor="#ccc")),
-        tooltip=["MERCHANT_ID:N","DATE_ONLY:T","TC_REPLY_COUNT:Q",
-                 "MP_REPLY_COUNT:Q","TC_REPLY_PCT:Q"]
-    ).properties(height=max(200, len(merch)*28), background="transparent"),
-    use_container_width=True
-)
+st.markdown('<div class="section-title">📈 Daily TC% Trend — Top Merchants</div>', unsafe_allow_html=True)
+
+top_merchants = merch.nlargest(8, "tc_replies")["MERCHANT_ID"].tolist()
+trend_df = df[df["MERCHANT_ID"].isin(top_merchants)].copy()
+trend_df["DATE_ONLY"] = pd.to_datetime(trend_df["DATE_ONLY"])
+
+col_t1, col_t2 = st.columns([2, 1])
+
+with col_t1:
+    st.altair_chart(
+        alt.Chart(trend_df).mark_line(point=alt.OverlayMarkDef(size=40))
+        .encode(
+            x=alt.X("DATE_ONLY:T", title="Date", axis=alt.Axis(labelAngle=-35, labelColor="#ccc", titleColor="#ccc")),
+            y=alt.Y("TC_REPLY_PCT:Q", title="TC Reply %",
+                    axis=alt.Axis(labelColor="#ccc", titleColor="#ccc")),
+            color=alt.Color("MERCHANT_ID:N",
+                            legend=alt.Legend(labelColor="#ccc", titleColor="#ccc")),
+            tooltip=["MERCHANT_ID:N","DATE_ONLY:T","TC_REPLY_PCT:Q","TC_REPLY_COUNT:Q","MP_REPLY_COUNT:Q"]
+        ).properties(height=320, background="transparent"),
+        use_container_width=True
+    )
+
+with col_t2:
+    # Daily total TC vs MP stacked bar
+    daily_totals = df.groupby("DATE_ONLY")[["TC_REPLY_COUNT","MP_REPLY_COUNT"]].sum().reset_index()
+    daily_totals["DATE_ONLY"] = pd.to_datetime(daily_totals["DATE_ONLY"])
+    daily_totals_long = daily_totals.melt(id_vars="DATE_ONLY", var_name="type", value_name="count")
+    daily_totals_long["type"] = daily_totals_long["type"].map({"TC_REPLY_COUNT":"TC","MP_REPLY_COUNT":"MP"})
+    st.altair_chart(
+        alt.Chart(daily_totals_long).mark_bar()
+        .encode(
+            x=alt.X("DATE_ONLY:T", title="Date", axis=alt.Axis(labelAngle=-35, labelColor="#ccc", titleColor="#ccc")),
+            y=alt.Y("count:Q", title="Replies", stack=True, axis=alt.Axis(labelColor="#ccc", titleColor="#ccc")),
+            color=alt.Color("type:N", scale=alt.Scale(
+                domain=["TC","MP"], range=["#c084fc","#60a5fa"]),
+                legend=alt.Legend(labelColor="#ccc", titleColor="#ccc")),
+            tooltip=["DATE_ONLY:T","type:N","count:Q"]
+        ).properties(title=alt.TitleParams("Daily TC vs MP Replies", color="#ccc"),
+                     height=320, background="transparent"),
+        use_container_width=True
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DETAIL TABLE
